@@ -175,7 +175,7 @@ class Block(nn.Module):
         x = self.attn(x)
         # Reverse window partition
         if self.window_size > 0:
-            x = window_unpartition(x, self.window_size, pad_hw, (H, W))
+            x = window_unpartition(x, self.window_size, pad_hw, [H, W])
 
         x = shortcut + x
         x = x + self.mlp(self.norm2(x))
