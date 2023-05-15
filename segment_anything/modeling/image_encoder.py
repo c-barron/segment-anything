@@ -167,6 +167,7 @@ class Block(nn.Module):
         shortcut = x
         x = self.norm1(x)
         # Window partition
+        pad_hw = None
         if self.window_size > 0:
             H, W = x.shape[1], x.shape[2]
             x, pad_hw = window_partition(x, self.window_size)
