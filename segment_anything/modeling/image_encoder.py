@@ -69,7 +69,7 @@ class ImageEncoderViT(nn.Module):
                 torch.zeros(1, img_size // patch_size, img_size // patch_size, embed_dim)
             )
 
-        self.blocks = nn.ModuleList()
+        self.blocks: List[nn.Module] = []
         for i in range(depth):
             block = Block(
                 dim=embed_dim,
@@ -83,9 +83,10 @@ class ImageEncoderViT(nn.Module):
                 window_size=window_size if i not in global_attn_indexes else 0,
                 input_size=(img_size // patch_size, img_size // patch_size),
             )
+            self.add_module(f"block_{i}", block)
             self.blocks.append(block)
 
-        self.neck = nn.Sequential(
+        self.neck: nn.Module = nn.Sequential(
             nn.Conv2d(
                 embed_dim,
                 out_chans,
@@ -120,8 +121,6 @@ class ImageEncoderViT(nn.Module):
 class Block(nn.Module):
     """Transformer blocks with support of window attention and residual propagation blocks"""
 
-    window_size: int
-
     def __init__(
         self,
         dim: int,
@@ -149,19 +148,23 @@ class Block(nn.Module):
         self.norm2 = norm_layer(dim)
         self.mlp = MLPBlock(embedding_dim=dim, mlp_dim=int(dim * mlp_ratio), act=act_layer)
 
-        self.window_size = window_size
+        self.window_size = torch.jit.Attribute(window_size, int)
 
     @torch.jit.script_method
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         shortcut = x
         x = self.norm1(x)
         # Window partition
-        H, W = x.shape[1], x.shape[2]
-        x, pad_hw = window_partition(x, self.window_size)
+        Hp = None
+        Wp = None
+        if self.window_size > 0:
+            H, W = x.shape[1], x.shape[2]
+            x, Hp, Wp = window_partition(x, self.window_size)
 
         x = self.attn(x)
         # Reverse window partition
-        x = window_unpartition(x, self.window_size, pad_hw, (H, W))
+        if self.window_size > 0:
+            x = self.window_unpartition(x, self.window_size, Hp, Wp, H, W)
 
         x = shortcut + x
         x = x + self.mlp(self.norm2(x))
@@ -241,9 +244,6 @@ def window_partition(x: torch.Tensor, window_size: int) -> Tuple[torch.Tensor, T
             Hp: padded height before partition
             Wp: padded width before partition
     """
-    if window_size == 0:
-        return x, (x.shape[1], x.shape[2])
-    
     B, H, W, C = x.shape
     pad_h = (window_size - H % window_size) % window_size
     pad_w = (window_size - W % window_size) % window_size
@@ -274,9 +274,6 @@ def window_unpartition(
     Returns:
         x: unpartitioned sequences with [B, H, W, C].
     """
-    if window_size == 0:
-        return windows
-
     Hp, Wp = pad_hw
     H, W = hw
     B = windows.shape[0] // (Hp * Wp // window_size // window_size)
