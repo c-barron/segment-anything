@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from typing import Optional, Tuple, Type
+from typing import Optional, Tuple, Type, List
 
 from .common import LayerNorm2d, MLPBlock
 
@@ -53,9 +53,9 @@ class ImageEncoderViT(nn.Module):
             global_attn_indexes (list): Indexes for blocks using global attention.
         """
         super().__init__()
-        self.img_size = img_size
+        self.img_size: int = img_size
 
-        self.patch_embed = PatchEmbed(
+        self.patch_embed: nn.Module = PatchEmbed(
             kernel_size=(patch_size, patch_size),
             stride=(patch_size, patch_size),
             in_chans=in_chans,
@@ -69,7 +69,7 @@ class ImageEncoderViT(nn.Module):
                 torch.zeros(1, img_size // patch_size, img_size // patch_size, embed_dim)
             )
 
-        self.blocks = nn.ModuleList()
+        self.blocks: List[nn.Module] = []
         for i in range(depth):
             block = Block(
                 dim=embed_dim,
@@ -83,9 +83,10 @@ class ImageEncoderViT(nn.Module):
                 window_size=window_size if i not in global_attn_indexes else 0,
                 input_size=(img_size // patch_size, img_size // patch_size),
             )
+            self.add_module(f"block_{i}", block)
             self.blocks.append(block)
 
-        self.neck = nn.Sequential(
+        self.neck: nn.Module = nn.Sequential(
             nn.Conv2d(
                 embed_dim,
                 out_chans,
@@ -103,6 +104,7 @@ class ImageEncoderViT(nn.Module):
             LayerNorm2d(out_chans),
         )
 
+    @torch.jit.export
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.patch_embed(x)
         if self.pos_embed is not None:
@@ -132,21 +134,6 @@ class Block(nn.Module):
         window_size: int = 0,
         input_size: Optional[Tuple[int, int]] = None,
     ) -> None:
-        """
-        Args:
-            dim (int): Number of input channels.
-            num_heads (int): Number of attention heads in each ViT block.
-            mlp_ratio (float): Ratio of mlp hidden dim to embedding dim.
-            qkv_bias (bool): If True, add a learnable bias to query, key, value.
-            norm_layer (nn.Module): Normalization layer.
-            act_layer (nn.Module): Activation layer.
-            use_rel_pos (bool): If True, add relative positional embeddings to the attention map.
-            rel_pos_zero_init (bool): If True, zero initialize relative positional parameters.
-            window_size (int): Window size for window attention blocks. If it equals 0, then
-                use global attention.
-            input_size (tuple(int, int) or None): Input resolution for calculating the relative
-                positional parameter size.
-        """
         super().__init__()
         self.norm1 = norm_layer(dim)
         self.attn = Attention(
@@ -161,21 +148,23 @@ class Block(nn.Module):
         self.norm2 = norm_layer(dim)
         self.mlp = MLPBlock(embedding_dim=dim, mlp_dim=int(dim * mlp_ratio), act=act_layer)
 
-        self.window_size = window_size
+        self.window_size = torch.jit.Attribute(window_size, int)
 
+    @torch.jit.script_method
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         shortcut = x
         x = self.norm1(x)
         # Window partition
-        pad_hw = None
+        Hp = None
+        Wp = None
         if self.window_size > 0:
             H, W = x.shape[1], x.shape[2]
-            x, pad_hw = window_partition(x, self.window_size)
+            x, Hp, Wp = window_partition(x, self.window_size)
 
         x = self.attn(x)
         # Reverse window partition
         if self.window_size > 0:
-            x = window_unpartition(x, self.window_size, pad_hw, [H, W])
+            x = self.window_unpartition(x, self.window_size, Hp, Wp, H, W)
 
         x = shortcut + x
         x = x + self.mlp(self.norm2(x))
@@ -206,14 +195,14 @@ class Attention(nn.Module):
                 positional parameter size.
         """
         super().__init__()
-        self.num_heads = num_heads
+        self.num_heads = torch.jit.Attribute(num_heads, int)
         head_dim = dim // num_heads
-        self.scale = head_dim**-0.5
+        self.scale = torch.jit.Attribute(head_dim**-0.5, float)
 
         self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
         self.proj = nn.Linear(dim, dim)
 
-        self.use_rel_pos = use_rel_pos
+        self.use_rel_pos = torch.jit.Attribute(use_rel_pos, bool)
         if self.use_rel_pos:
             assert (
                 input_size is not None
@@ -222,6 +211,7 @@ class Attention(nn.Module):
             self.rel_pos_h = nn.Parameter(torch.zeros(2 * input_size[0] - 1, head_dim))
             self.rel_pos_w = nn.Parameter(torch.zeros(2 * input_size[1] - 1, head_dim))
 
+    @torch.jit.script_method
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, H, W, _ = x.shape
         # qkv with shape (3, B, nHead, H * W, C)
@@ -240,7 +230,7 @@ class Attention(nn.Module):
 
         return x
 
-
+@torch.jit.script
 def window_partition(x: torch.Tensor, window_size: int) -> Tuple[torch.Tensor, Tuple[int, int]]:
     """
     Partition into non-overlapping windows with padding if needed.
@@ -249,11 +239,12 @@ def window_partition(x: torch.Tensor, window_size: int) -> Tuple[torch.Tensor, T
         window_size (int): window size.
 
     Returns:
-        windows: windows after partition with [B * num_windows, window_size, window_size, C].
-        (Hp, Wp): padded height and width before partition
+        A list containing:
+            windows: windows after partition with [B * num_windows, window_size, window_size, C].
+            Hp: padded height before partition
+            Wp: padded width before partition
     """
     B, H, W, C = x.shape
-
     pad_h = (window_size - H % window_size) % window_size
     pad_w = (window_size - W % window_size) % window_size
     if pad_h > 0 or pad_w > 0:
@@ -265,6 +256,8 @@ def window_partition(x: torch.Tensor, window_size: int) -> Tuple[torch.Tensor, T
     return windows, (Hp, Wp)
 
 
+
+@torch.jit.script
 def window_unpartition(
     windows: torch.Tensor, window_size: int, pad_hw: Tuple[int, int], hw: Tuple[int, int]
 ) -> torch.Tensor:
@@ -273,8 +266,10 @@ def window_unpartition(
     Args:
         windows (tensor): input tokens with [B * num_windows, window_size, window_size, C].
         window_size (int): window size.
-        pad_hw (Tuple): padded height and width (Hp, Wp).
-        hw (Tuple): original height and width (H, W) before padding.
+        Hp: Padded height.
+        Wp: Padded width.
+        H: Original height before padding.
+        W: Original width before padding.
 
     Returns:
         x: unpartitioned sequences with [B, H, W, C].
@@ -289,7 +284,7 @@ def window_unpartition(
         x = x[:, :H, :W, :].contiguous()
     return x
 
-
+@torch.jit.script
 def get_rel_pos(q_size: int, k_size: int, rel_pos: torch.Tensor) -> torch.Tensor:
     """
     Get relative positional embeddings according to the relative positions of
@@ -303,9 +298,7 @@ def get_rel_pos(q_size: int, k_size: int, rel_pos: torch.Tensor) -> torch.Tensor
         Extracted positional embeddings according to relative positions.
     """
     max_rel_dist = int(2 * max(q_size, k_size) - 1)
-    # Interpolate rel pos if needed.
     if rel_pos.shape[0] != max_rel_dist:
-        # Interpolate rel pos.
         rel_pos_resized = F.interpolate(
             rel_pos.reshape(1, rel_pos.shape[0], -1).permute(0, 2, 1),
             size=max_rel_dist,
@@ -315,7 +308,6 @@ def get_rel_pos(q_size: int, k_size: int, rel_pos: torch.Tensor) -> torch.Tensor
     else:
         rel_pos_resized = rel_pos
 
-    # Scale the coords with short length if shapes for q and k are different.
     q_coords = torch.arange(q_size)[:, None] * max(k_size / q_size, 1.0)
     k_coords = torch.arange(k_size)[None, :] * max(q_size / k_size, 1.0)
     relative_coords = (q_coords - k_coords) + (k_size - 1) * max(q_size / k_size, 1.0)
@@ -323,6 +315,7 @@ def get_rel_pos(q_size: int, k_size: int, rel_pos: torch.Tensor) -> torch.Tensor
     return rel_pos_resized[relative_coords.long()]
 
 
+@torch.jit.script
 def add_decomposed_rel_pos(
     attn: torch.Tensor,
     q: torch.Tensor,
