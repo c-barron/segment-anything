@@ -35,30 +35,23 @@ class SamEncoder(nn.Module):
 
     def forward(
         self,
-        image: np.ndarray,
-        image_format: str = "RGB",
+        image: torch.Tensor,
     ) -> None:
         """
         Calculates the image embeddings for the provided image, allowing
         masks to be predicted with the 'predict' method.
 
         Arguments:
-          image (np.ndarray): The image for calculating masks. Expects an
-            image in HWC uint8 format, with pixel values in [0, 255].
-          image_format (str): The color format of the image, in ['RGB', 'BGR'].
+          image (torch.Tensor): The image for calculating masks. Expects an
+            image in BxCxHxW format, with pixel values in [0, 255].
         """
         print("RUNNING FORWARD")
-        assert image_format in [
-            "RGB",
-            "BGR",
-        ], f"image_format must be in ['RGB', 'BGR'], is {image_format}."
-        if image_format != self.model.image_format:
-            image = image[..., ::-1]
-
+        # set the image to the current device
+        image = image.to(self.device)
         # Transform the image to the form expected by the model
-        input_image = self.transform.apply_image(image)
-        input_image_torch = torch.as_tensor(input_image, device=self.device)
-        input_image_torch = input_image_torch.permute(2, 0, 1).contiguous()[None, :, :, :]
+        input_image_torch = self.transform.apply_image_torch(image)
+        # input_image_torch = torch.as_tensor(input_image, device=self.device)
+        # input_image_torch = input_image_torch.permute(2, 0, 1).contiguous()[None, :, :, :]
 
         features = self.set_torch_image(input_image_torch, image.shape[:2])
         return features
