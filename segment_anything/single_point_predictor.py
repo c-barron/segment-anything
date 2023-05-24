@@ -33,15 +33,11 @@ class SinglePointPredictor(nn.Module):
 
     def forward(
         self,
-        features,
-        original_size,
-        input_size,
-        point_coords: Optional[np.ndarray] = None,
-        point_labels: Optional[np.ndarray] = None,
-        box: Optional[np.ndarray] = None,
-        mask_input: Optional[np.ndarray] = None,
-        multimask_output: bool = True,
-        return_logits: bool = False,
+        features: torch.Tensor,
+        original_size: Tuple[int, int],
+        input_size: Tuple[int, int],
+        coords_torch: torch.Tensor, 
+        labels_torch: torch.Tensor,
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Predict masks for the given input prompts, using the currently set image.
@@ -75,24 +71,13 @@ class SinglePointPredictor(nn.Module):
             of masks and H=W=256. These low resolution logits can be passed to
             a subsequent iteration as mask input.
         """
+        multimask_output = False,
+        return_logits = False,
   
         # Transform input prompts
-        coords_torch, labels_torch, box_torch, mask_input_torch = None, None, None, None
-        if point_coords is not None:
-            assert (
-                point_labels is not None
-            ), "point_labels must be supplied if point_coords is supplied."
-            point_coords = self.transform.apply_coords(point_coords, original_size)
-            coords_torch = torch.as_tensor(point_coords, dtype=torch.float, device=self.device)
-            labels_torch = torch.as_tensor(point_labels, dtype=torch.int, device=self.device)
-            coords_torch, labels_torch = coords_torch[None, :, :], labels_torch[None, :]
-        if box is not None:
-            box = self.transform.apply_boxes(box, self.original_size)
-            box_torch = torch.as_tensor(box, dtype=torch.float, device=self.device)
-            box_torch = box_torch[None, :]
-        if mask_input is not None:
-            mask_input_torch = torch.as_tensor(mask_input, dtype=torch.float, device=self.device)
-            mask_input_torch = mask_input_torch[None, :, :, :]
+        box_torch, mask_input_torch = None, None
+            
+        coords_torch, labels_torch = coords_torch[None, :, :], labels_torch[None, :]
 
         masks, iou_predictions, low_res_masks = self.predict_torch(
             features,
@@ -100,10 +85,6 @@ class SinglePointPredictor(nn.Module):
             input_size,
             coords_torch,
             labels_torch,
-            box_torch,
-            mask_input_torch,
-            multimask_output,
-            return_logits=return_logits,
         )
 
         masks_np = masks[0].detach().cpu().numpy()
@@ -119,10 +100,6 @@ class SinglePointPredictor(nn.Module):
         input_size: Tuple[int, int],
         point_coords: Optional[torch.Tensor],
         point_labels: Optional[torch.Tensor],
-        boxes: Optional[torch.Tensor] = None,
-        mask_input: Optional[torch.Tensor] = None,
-        multimask_output: bool = True,
-        return_logits: bool = False,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Predict masks for the given input prompts, using the currently set image.
@@ -160,16 +137,13 @@ class SinglePointPredictor(nn.Module):
             a subsequent iteration as mask input.
         """
 
-        if point_coords is not None:
-            points = (point_coords, point_labels)
-        else:
-            points = None
-
+        points = (point_coords, point_labels)
+     
         # Embed prompts
         sparse_embeddings, dense_embeddings = self.model.prompt_encoder(
             points=points,
-            boxes=boxes,
-            masks=mask_input,
+            boxes=None,
+            masks=None,
         )
 
         # Predict masks
@@ -178,14 +152,13 @@ class SinglePointPredictor(nn.Module):
             image_pe=self.model.prompt_encoder.get_dense_pe(),
             sparse_prompt_embeddings=sparse_embeddings,
             dense_prompt_embeddings=dense_embeddings,
-            multimask_output=multimask_output,
+            multimask_output=False,
         )
 
         # Upscale the masks to the original image resolution
         masks = self.model.postprocess_masks(low_res_masks, input_size, original_size)
 
-        if not return_logits:
-            masks = masks > self.model.mask_threshold
+        masks = masks > self.model.mask_threshold
 
         return masks, iou_predictions, low_res_masks
 
