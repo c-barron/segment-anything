@@ -47,11 +47,10 @@ class SamEncoder(nn.Module):
         """
         print("RUNNING FORWARD")
         # set the image to the current device
-        image = image.to(self.device)
+        input_image_torch = image.to(self.device)
         # Transform the image to the form expected by the model
-        input_image_torch = self.transform.apply_image_torch(image)
+        # input_image_torch = self.transform.apply_image_torch(image)
         # input_image_torch = torch.as_tensor(input_image, device=self.device)
-        # input_image_torch = input_image_torch.permute(2, 0, 1).contiguous()[None, :, :, :]
 
         features = self.set_torch_image(input_image_torch, image.shape[:2])
         return features
