@@ -13,4 +13,5 @@ from .build_sam import (
 )
 from .predictor import SamPredictor
 from .encoder import SamEncoder
+from .single_point_predictor import SinglePointPredictor
 from .automatic_mask_generator import SamAutomaticMaskGenerator
