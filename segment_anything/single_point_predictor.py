@@ -34,8 +34,8 @@ class SinglePointPredictor(nn.Module):
     def forward(
         self,
         features: torch.Tensor,
-        original_size: Tuple[int, int],
-        input_size: Tuple[int, int],
+        original_size: torch.Tensor,
+        input_size: torch.Tensor,
         coords_torch: torch.Tensor, 
         labels_torch: torch.Tensor,
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -79,25 +79,31 @@ class SinglePointPredictor(nn.Module):
             
         coords_torch, labels_torch = coords_torch[None, :, :], labels_torch[None, :]
 
+        # Convert tensor to list
+        original = original_size.tolist()
+        input = input_size.tolist()
+
+        # Convert list to tuple
+        original_tuple = tuple(original)
+        input_tuple = tuple(input)
+
+
         masks, iou_predictions, low_res_masks = self.predict_torch(
             features,
-            original_size,
-            input_size,
+            original_tuple,
+            input_tuple,
             coords_torch,
             labels_torch,
         )
 
-        masks_np = masks[0].detach().cpu().numpy()
-        iou_predictions_np = iou_predictions[0].detach().cpu().numpy()
-        low_res_masks_np = low_res_masks[0].detach().cpu().numpy()
-        return masks_np, iou_predictions_np, low_res_masks_np
+        return masks, iou_predictions, low_res_masks
 
     @torch.no_grad()
     def predict_torch(
         self,
         features: torch.Tensor,
-        original_size: Tuple[int, int],
-        input_size: Tuple[int, int],
+        original_size: torch.Tensor,
+        input_size: torch.Tensor,
         point_coords: Optional[torch.Tensor],
         point_labels: Optional[torch.Tensor],
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
