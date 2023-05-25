@@ -134,8 +134,6 @@ class SamPredictor:
             raise RuntimeError("An image must be set with .set_image(...) before mask prediction.")
 
         print("PREDICTING")
-        print("ORIGINAL SIZE: " + str(self.original_size))
-        print("INPUT SIZE: " + str(self.input_size))
         # Transform input prompts
         coords_torch, labels_torch, box_torch, mask_input_torch = None, None, None, None
         if point_coords is not None:

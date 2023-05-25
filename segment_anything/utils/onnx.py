@@ -74,19 +74,13 @@ class SamOnnxModel(nn.Module):
         return mask_embedding
 
     def mask_postprocessing(self, masks: torch.Tensor, orig_im_size: torch.Tensor) -> torch.Tensor:
+        # Resize the masks tensor from 256x256 to 1024x1024
         masks = F.interpolate(
             masks,
-            size=(self.img_size, self.img_size),
+            size=(1024, 1024),
             mode="bilinear",
             align_corners=False,
         )
-
-        prepadded_size = self.resize_longest_image_size(orig_im_size, self.img_size).to(torch.int64)
-        masks = masks[..., : prepadded_size[0], : prepadded_size[1]]  # type: ignore
-
-        orig_im_size = orig_im_size.to(torch.int64)
-        h, w = orig_im_size[0], orig_im_size[1]
-        masks = F.interpolate(masks, size=(h, w), mode="bilinear", align_corners=False)
         return masks
 
     def select_masks(
