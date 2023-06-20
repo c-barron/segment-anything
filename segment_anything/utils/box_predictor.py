@@ -65,6 +65,17 @@ class BoxPredictor(nn.Module):
             ].weight * (point_labels == i)
 
         return point_embedding
+    
+    def _embed_boxes(self, box_coords: torch.Tensor) -> torch.Tensor:
+        box_coords = box_coords + 0.5
+        box_coords = box_coords / self.img_size
+        coords = box_coords.reshape(-1, 2, 2)
+        corner_embedding = self.model.prompt_encoder.pe_layer._pe_encoding(coords)
+        
+        for i in range(self.model.prompt_encoder.num_point_embeddings):
+            corner_embedding[:, i, :] = corner_embedding[:, i, :] + self.model.prompt_encoder.point_embeddings[i].weight
+
+        return corner_embedding
 
     def _embed_masks(self) -> torch.Tensor:
         # Hardcoded to not use a mask embedding
@@ -100,10 +111,12 @@ class BoxPredictor(nn.Module):
     def forward(
         self,
         image_embeddings: torch.Tensor,
-        point_coords: torch.Tensor,
-        point_labels: torch.Tensor,
+        # point_coords: torch.Tensor,
+        # point_labels: torch.Tensor,
+        box_coords: torch.Tensor,
     ):
-        sparse_embedding = self._embed_points(point_coords, point_labels)
+        # sparse_embedding = self._embed_points(point_coords, point_labels)
+        sparse_embedding = self._embed_boxes(box_coords)
         dense_embedding = self._embed_masks()
 
         masks, scores = self.model.mask_decoder.predict_masks(
