@@ -66,14 +66,11 @@ class SamOnnxModel(nn.Module):
 
         return point_embedding
 
-    def _embed_masks(self, input_mask: torch.Tensor, has_mask_input: torch.Tensor) -> torch.Tensor:
-        mask_embedding = has_mask_input * self.model.prompt_encoder.mask_downscaling(input_mask)
-        mask_embedding = mask_embedding + (
-            1 - has_mask_input
-        ) * self.model.prompt_encoder.no_mask_embed.weight.reshape(1, -1, 1, 1)
+    def _embed_masks(self) -> torch.Tensor:
+        mask_embedding = self.model.prompt_encoder.no_mask_embed.weight.reshape(1, -1, 1, 1)
         return mask_embedding
 
-    def mask_postprocessing(self, masks: torch.Tensor, orig_im_size: torch.Tensor) -> torch.Tensor:
+    def mask_postprocessing(self, masks: torch.Tensor) -> torch.Tensor:
         # Resize the masks tensor from 256x256 to 1024x1024
         masks = F.interpolate(
             masks,
@@ -104,12 +101,11 @@ class SamOnnxModel(nn.Module):
         image_embeddings: torch.Tensor,
         point_coords: torch.Tensor,
         point_labels: torch.Tensor,
-        mask_input: torch.Tensor,
-        has_mask_input: torch.Tensor,
-        orig_im_size: torch.Tensor,
+        
     ):
+        # orig_im_size is always 1024x1024
         sparse_embedding = self._embed_points(point_coords, point_labels)
-        dense_embedding = self._embed_masks(mask_input, has_mask_input)
+        dense_embedding = self._embed_masks()
 
         masks, scores = self.model.mask_decoder.predict_masks(
             image_embeddings=image_embeddings,
@@ -126,7 +122,7 @@ class SamOnnxModel(nn.Module):
         if self.return_single_mask:
             masks, scores = self.select_masks(masks, scores, point_coords.shape[1])
 
-        upscaled_masks = self.mask_postprocessing(masks, orig_im_size)
+        upscaled_masks = self.mask_postprocessing(masks)
 
         if self.return_extra_metrics:
             stability_scores = calculate_stability_score(
